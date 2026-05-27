@@ -1,5 +1,5 @@
-# Logic for querying OpenStreetMap (no API key needed)
 import requests
+import time
 from typing import List, Dict, Optional
 
 def get_coordinates(street_name: str, city: str) -> Optional[tuple]:
@@ -11,7 +11,6 @@ def get_coordinates(street_name: str, city: str) -> Optional[tuple]:
         "format": "json",
         "limit": 1
     }
-    # OpenStreetMap requires a custom User-Agent to prevent blocking
     headers = {"User-Agent": "RoleScoutApp/1.0"}
     
     try:
@@ -25,13 +24,13 @@ def get_coordinates(street_name: str, city: str) -> Optional[tuple]:
         print(f"Error fetching coordinates: {e}")
         return None
 
-def find_businesses_nearby(lat: float, lon: float, radius: int, business_type: str = "office") -> List[Dict]:
-    """Queries the Overpass API for businesses within a specific radius (in metres)."""
-    overpass_url = "http://overpass-api.de/api/interpreter"
+def find_businesses_nearby(lat: float, lon: float, radius: int, business_type: str = "office", retries: int = 3) -> List[Dict]:
+    """Queries the Overpass API with built-in retries for timeout errors."""
+    overpass_url = "https://overpass-api.de/api/interpreter"
     
-    # Overpass QL query: searches for nodes within 'radius' of the lat/lon
+    # We add [timeout:25] to explicitly give the server more time to process the geography
     overpass_query = f"""
-    [out:json];
+    [out:json][timeout:25];
     (
       node["{business_type}"](around:{radius},{lat},{lon});
       way["{business_type}"](around:{radius},{lat},{lon});
@@ -39,28 +38,49 @@ def find_businesses_nearby(lat: float, lon: float, radius: int, business_type: s
     out center;
     """
     
-    try:
-        response = requests.post(overpass_url, data={"data": overpass_query})
-        response.raise_for_status()
-        data = response.json()
-        
-        businesses = []
-        for element in data.get("elements", []):
-            tags = element.get("tags", {})
-            name = tags.get("name")
-            website = tags.get("website") or tags.get("contact:website")
+    headers = {
+        "User-Agent": "RoleScoutApp/1.0",
+        "Accept": "*/*"
+    }
+    
+    # A standard loop to retry the request if the server is busy
+    for attempt in range(retries):
+        try:
+            # We set a Python timeout of 30 seconds so our code doesn't hang forever
+            response = requests.post(overpass_url, data={"data": overpass_query}, headers=headers, timeout=30)
             
-            # We only care about businesses that actually have a name
-            if name:
-                businesses.append({
-                    "name": name,
-                    "website": website,
-                    "type": tags.get(business_type, "Unknown")
-                })
-        return businesses
-    except requests.RequestException as e:
-        print(f"Error fetching businesses from Overpass: {e}")
-        return []
+            # If the status code is 504, manually trigger a retry
+            if response.status_code == 504:
+                print(f"Attempt {attempt + 1}: Server is busy (504). Retrying in 2 seconds...")
+                time.sleep(2)
+                continue
+                
+            response.raise_for_status()
+            data = response.json()
+            
+            businesses = []
+            for element in data.get("elements", []):
+                tags = element.get("tags", {})
+                name = tags.get("name")
+                website = tags.get("website") or tags.get("contact:website")
+                
+                if name:
+                    businesses.append({
+                        "name": name,
+                        "website": website,
+                        "type": tags.get(business_type, "Unknown")
+                    })
+            return businesses
+            
+        except requests.exceptions.Timeout:
+            print(f"Attempt {attempt + 1}: The connection timed out. Retrying in 2 seconds...")
+            time.sleep(2)
+        except requests.RequestException as e:
+            print(f"Error fetching businesses from Overpass: {e}")
+            break # Break the loop on other fatal errors (like no internet)
+            
+    print("Failed to fetch data after all retries. The server might be down.")
+    return []
 
 # --- Quick Local Test ---
 if __name__ == "__main__":
@@ -68,11 +88,14 @@ if __name__ == "__main__":
     coords = get_coordinates("Union Street", "Aberdeen")
     if coords:
         print(f"Found coordinates: {coords}")
-        print("Searching for offices within a 500 metre radius...")
-        # Searching for 'office' as a broad category first
+        print("Searching for offices within a 500 metre radius. This may take a few seconds...")
         results = find_businesses_nearby(coords[0], coords[1], 500, "office")
         
-        for idx, biz in enumerate(results[:5]): # Just print the first 5 so we don't flood the terminal
-            print(f"{idx + 1}. {biz['name']} - Website: {biz['website']}")
+        if not results:
+            print("No businesses found or request was blocked.")
+        else:
+            print(f"\nSuccess! Found {len(results)} total offices. Here are the first 5:")
+            for idx, biz in enumerate(results[:5]): 
+                print(f"{idx + 1}. {biz['name']} - Website: {biz['website']}")
     else:
         print("Could not find that location.")
