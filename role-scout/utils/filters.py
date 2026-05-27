@@ -1,0 +1,1 @@
+# Logic to exclude sole traders and clean up Pandas dataframes
