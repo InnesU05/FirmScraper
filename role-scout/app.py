@@ -31,6 +31,13 @@ if 'raw_data' not in st.session_state:
 if 'clean_df' not in st.session_state:
     st.session_state.clean_df = pd.DataFrame()
 
+# --- CRITICAL FIX: CACHE THE COORDINATES ---
+# Streamlit reruns every time you click the map. Without this cache, 
+# we spam the mapping API, get blocked, and the map disappears!
+@st.cache_data(show_spinner=False)
+def cached_get_coordinates(street, city):
+    return get_coordinates(street, city)
+
 # Sidebar Setup
 with st.sidebar:
     st.header("1. Set Map Focus")
@@ -54,10 +61,11 @@ with st.sidebar:
     business_type = tag_map[industry_focus]
 
 # --- Step 1: Map & Drawing ---
-coords = get_coordinates(street_name, city)
+# Call our new cached function instead of hitting the server raw
+coords = cached_get_coordinates(street_name, city)
 
 if coords:
-    # Initialise the map centered on your chosen street
+    # Initialise the map centred on your chosen street
     m = folium.Map(location=[coords[0], coords[1]], zoom_start=15)
     
     # Add drawing tools (we only need polygons and rectangles for this)
@@ -70,8 +78,8 @@ if coords:
     st.markdown("### Select Search Area")
     st.info("Use the ⬛ (Rectangle) or ⬟ (Polygon) tools on the left of the map to draw your search zone.")
     
-    # Render the map and capture any shapes drawn by the user
-    map_data = st_folium(m, width=1000, height=500)
+    # Render the map WITH a unique key so it remembers your drawings
+    map_data = st_folium(m, width=1000, height=500, key="firm_map")
     
     # Only show the search button if the user has actually drawn a shape
     if map_data and map_data.get("last_active_drawing"):
@@ -94,6 +102,9 @@ if coords:
                         st.success(f"Successfully identified {len(st.session_state.clean_df)} viable targets.")
                     else:
                         st.warning("No businesses found in that specific shape. Try drawing a wider area.")
+else:
+    # A fallback so you aren't left staring at a blank screen if the server blocks you
+    st.error("⚠️ Could not load the map. The coordinate server might be busy, or the location is misspelled. Please wait 5 seconds and refresh.")
 
 # --- Step 2: Deep Scraping ---
 if not st.session_state.clean_df.empty:
