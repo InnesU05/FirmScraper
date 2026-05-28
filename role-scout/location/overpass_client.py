@@ -82,6 +82,63 @@ def find_businesses_nearby(lat: float, lon: float, radius: int, business_type: s
     print("Failed to fetch data after all retries. The server might be down.")
     return []
 
+def find_businesses_in_polygon(polygon_coords: list, business_type: str = "office", retries: int = 3) -> List[Dict]:
+    """Queries the Overpass API for businesses strictly within a drawn custom polygon."""
+    overpass_url = "https://overpass-api.de/api/interpreter"
+    
+    # Flatten the list of (lat, lon) tuples into the exact string format Overpass requires: "lat1 lon1 lat2 lon2"
+    poly_string = " ".join([f"{lat} {lon}" for lat, lon in polygon_coords])
+    
+    overpass_query = f"""
+    [out:json][timeout:25];
+    (
+      node["{business_type}"](poly:"{poly_string}");
+      way["{business_type}"](poly:"{poly_string}");
+    );
+    out center;
+    """
+    
+    headers = {
+        "User-Agent": "RoleScoutApp/1.1",
+        "Accept": "*/*"
+    }
+    
+    for attempt in range(retries):
+        try:
+            response = requests.post(overpass_url, data={"data": overpass_query}, headers=headers, timeout=30)
+            
+            if response.status_code == 504:
+                print(f"Attempt {attempt + 1}: Server is busy (504). Retrying in 2 seconds...")
+                time.sleep(2)
+                continue
+                
+            response.raise_for_status()
+            data = response.json()
+            
+            businesses = []
+            for element in data.get("elements", []):
+                tags = element.get("tags", {})
+                name = tags.get("name")
+                website = tags.get("website") or tags.get("contact:website")
+                
+                if name:
+                    businesses.append({
+                        "name": name,
+                        "website": website,
+                        "type": tags.get(business_type, "Unknown")
+                    })
+            return businesses
+            
+        except requests.exceptions.Timeout:
+            print(f"Attempt {attempt + 1}: The connection timed out. Retrying in 2 seconds...")
+            time.sleep(2)
+        except requests.RequestException as e:
+            print(f"Error fetching businesses from Overpass: {e}")
+            break 
+            
+    print("Failed to fetch data after all retries.")
+    return []
+
 # --- Quick Local Test ---
 if __name__ == "__main__":
     print("Fetching coordinates...")
