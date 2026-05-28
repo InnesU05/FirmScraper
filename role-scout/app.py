@@ -7,7 +7,8 @@ from streamlit_folium import st_folium
 from location.overpass_client import get_coordinates, find_businesses_in_polygon, find_businesses_nearby
 from utils.filters import clean_business_data
 from scraper.browser import fetch_page_html
-from scraper.parser import extract_emails, scan_for_roles
+from scraper.parser import extract_emails, scan_for_keywords
+from utils.constants import FIRM_CATEGORIES, JOB_ROLES
 
 # --- CLOUD SETUP SNIPPET ---
 os.system("playwright install chromium")
@@ -22,8 +23,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Role Scout: Firm Intelligence")
-st.markdown("Isolate professional consultancies and advisory firms using geospatial targeting.")
+st.title("Role Scout: Advanced Firm Intelligence")
+st.markdown("Isolate boutique consultancies and finance firms using geospatial targeting and deep text analysis.")
 
 # State management
 if 'raw_data' not in st.session_state:
@@ -37,14 +38,9 @@ def cached_get_coordinates(street, city):
 
 # Sidebar Setup
 with st.sidebar:
-    st.header("1. Set Map Focus")
+    st.header("1. Geospatial Focus")
     street_name = st.text_input("Street Name (to centre map)", value="Union Street")
     city = st.text_input("City", value="Aberdeen")
-    
-    st.divider()
-    
-    # --- NEW: Search Mode Toggle ---
-    st.header("2. Search Mode")
     search_mode = st.radio("Select Target Method", ["Draw Perimeter", "Radius Search"])
     
     if search_mode == "Radius Search":
@@ -54,30 +50,46 @@ with st.sidebar:
         
     st.divider()
     
-    st.header("3. Industry Parameters")
-    industry_focus = st.selectbox(
-        "Industry Focus",
-        options=["Engineering Consultancy", "Finance Consultancy", "Energy Services", "General Office"]
-    )
+    # --- NEW: Hierarchical Firm Selection ---
+    st.header("2. Firm Identity (Deep Scrape)")
+    st.markdown("We pull all offices from the map. The scraper will scan their websites for these exact terms to verify what they do.")
     
-    tag_map = {
-        "Engineering Consultancy": "office",
-        "Finance Consultancy": "office", 
-        "Energy Services": "commercial",
-        "General Office": "office"
-    }
-    business_type = tag_map[industry_focus]
+    all_categories = st.checkbox("Select All Industry Categories", value=False)
+    if all_categories:
+        selected_cats = list(FIRM_CATEGORIES.keys())
+    else:
+        selected_cats = st.multiselect("Select Industry Categories", list(FIRM_CATEGORIES.keys()), default=["Core Finance and Banking"])
+        
+    available_firm_types = []
+    for cat in selected_cats:
+        available_firm_types.extend(FIRM_CATEGORIES[cat])
+        
+    all_firm_types = st.checkbox("Select All Firm Types in Chosen Categories", value=True)
+    if all_firm_types:
+        final_firm_types = available_firm_types
+    else:
+        final_firm_types = st.multiselect("Select Specific Firm Types", available_firm_types, default=available_firm_types[:5] if available_firm_types else [])
+
+    st.divider()
+    
+    # --- NEW: Job Role Selection ---
+    st.header("3. Hiring Signals")
+    all_roles = st.checkbox("Select All Job Roles", value=False)
+    if all_roles:
+        final_job_roles = JOB_ROLES
+    else:
+        final_job_roles = st.multiselect(
+            "Select Job Roles", 
+            JOB_ROLES, 
+            default=["Finance analyst", "Graduate finance", "Commercial analyst"]
+        )
 
 # --- Step 1: Map & Location ---
 coords = cached_get_coordinates(street_name, city)
 
 if coords:
-    # ---------------------------------------------------------
-    # MODE A: DRAW PERIMETER
-    # ---------------------------------------------------------
     if search_mode == "Draw Perimeter":
         m = folium.Map(location=[coords[0], coords[1]], zoom_start=15)
-        
         draw_options = {
             'polyline': False, 'circlemarker': False, 'marker': False, 'circle': False,
             'polygon': True, 'rectangle': True
@@ -91,30 +103,26 @@ if coords:
         
         if map_data and map_data.get("last_active_drawing"):
             st.success("Perimeter locked. Ready to scan.")
-            fetch_button = st.button("Discover Firms in Perimeter", type="primary", use_container_width=True)
+            fetch_button = st.button("Discover Offices in Perimeter", type="primary", use_container_width=True)
             
             if fetch_button:
                 geom = map_data["last_active_drawing"]["geometry"]
                 if geom["type"] == "Polygon":
-                    with st.spinner("Querying drawn perimeter..."):
+                    with st.spinner("Pulling all commercial nodes from map..."):
                         raw_coords = geom["coordinates"][0]
                         polygon_coords = [(lat, lon) for lon, lat in raw_coords]
                         
-                        st.session_state.raw_data = find_businesses_in_polygon(polygon_coords, business_type)
+                        st.session_state.raw_data = find_businesses_in_polygon(polygon_coords)
                         
                         if st.session_state.raw_data:
                             st.session_state.clean_df = clean_business_data(st.session_state.raw_data)
-                            st.success(f"Successfully identified {len(st.session_state.clean_df)} viable targets.")
+                            st.success(f"Identified {len(st.session_state.clean_df)} valid commercial offices.")
                         else:
-                            st.warning("No businesses found in that specific shape. Try drawing a wider area.")
+                            st.warning("No commercial offices found in that specific shape. Try drawing a wider area.")
 
-    # ---------------------------------------------------------
-    # MODE B: RADIUS SEARCH
-    # ---------------------------------------------------------
     elif search_mode == "Radius Search":
         m = folium.Map(location=[coords[0], coords[1]], zoom_start=14)
         
-        # Visually render the radius on the map
         folium.Circle(
             location=[coords[0], coords[1]],
             radius=radius,
@@ -124,20 +132,20 @@ if coords:
         ).add_to(m)
         
         st.markdown("### Search Radius")
-        st.info(f"Targeting all {industry_focus.lower()} locations within a {radius} metre radius.")
+        st.info(f"Targeting all commercial locations within a {radius} metre radius.")
         
         st_folium(m, width=1000, height=500, key="radius_map")
         
-        fetch_button = st.button("Discover Firms in Radius", type="primary", use_container_width=True)
+        fetch_button = st.button("Discover Offices in Radius", type="primary", use_container_width=True)
         if fetch_button:
-            with st.spinner(f"Querying a {radius}m radius..."):
-                st.session_state.raw_data = find_businesses_nearby(coords[0], coords[1], radius, business_type)
+            with st.spinner(f"Pulling all commercial nodes within {radius}m..."):
+                st.session_state.raw_data = find_businesses_nearby(coords[0], coords[1], radius)
                 
                 if st.session_state.raw_data:
                     st.session_state.clean_df = clean_business_data(st.session_state.raw_data)
-                    st.success(f"Successfully identified {len(st.session_state.clean_df)} viable targets.")
+                    st.success(f"Identified {len(st.session_state.clean_df)} valid commercial offices.")
                 else:
-                    st.warning("No businesses found in this area. Try increasing the radius.")
+                    st.warning("No commercial offices found in this area. Try increasing the radius.")
 else:
     st.error("⚠️ Could not load the map. The coordinate server might be busy, or the location is misspelled. Please wait 5 seconds and refresh.")
 
@@ -148,14 +156,15 @@ if not st.session_state.clean_df.empty:
     st.dataframe(st.session_state.clean_df, use_container_width=True, hide_index=True)
     
     st.subheader("Deep Analysis")
-    st.markdown("Scan targeted websites for contact emails and early-career hiring signals (e.g., graduate, analyst, entry-level).")
+    st.markdown("The scraper will now visit these websites and cross-reference the text against your selected Firm Types and Hiring Signals.")
     
     scrape_button = st.button("Initiate Deep Scrape", type="primary")
     
     if scrape_button:
         df = st.session_state.clean_df.copy()
-        df["Contact Emails"] = ""
+        df["Verified Identity (Website Match)"] = ""
         df["Hiring Signals"] = ""
+        df["Contact Emails"] = ""
         
         progress_bar = st.progress(0, text="Scanning targets. Please wait...")
         total_firms = len(df)
@@ -167,12 +176,15 @@ if not st.session_state.clean_df.empty:
             html = fetch_page_html(url)
             if html:
                 emails = extract_emails(html)
-                roles = scan_for_roles(html)
+                matched_identity = scan_for_keywords(html, final_firm_types)
+                matched_roles = scan_for_keywords(html, final_job_roles)
                 
                 df.at[index, "Contact Emails"] = ", ".join(emails) if emails else "None found"
-                df.at[index, "Hiring Signals"] = ", ".join(roles).title() if roles else "No signals"
+                df.at[index, "Verified Identity (Website Match)"] = ", ".join(matched_identity).title() if matched_identity else "Unverified/Other"
+                df.at[index, "Hiring Signals"] = ", ".join(matched_roles).title() if matched_roles else "No signals"
             else:
                 df.at[index, "Contact Emails"] = "Scan failed"
+                df.at[index, "Verified Identity (Website Match)"] = "Scan failed"
                 df.at[index, "Hiring Signals"] = "Scan failed"
                 
         progress_bar.progress(1.0, text="Analysis complete.")
@@ -185,6 +197,6 @@ if not st.session_state.clean_df.empty:
         st.download_button(
             label="Download Report as CSV",
             data=csv,
-            file_name=f"firm_intelligence_{city.lower().replace(' ', '_')}.csv",
+            file_name=f"finance_intelligence_{city.lower().replace(' ', '_')}.csv",
             mime="text/csv",
         )
