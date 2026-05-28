@@ -4,7 +4,7 @@ import os
 import folium
 from folium.plugins import Draw
 from streamlit_folium import st_folium
-from location.overpass_client import get_coordinates, find_businesses_in_polygon
+from location.overpass_client import get_coordinates, find_businesses_in_polygon, find_businesses_nearby
 from utils.filters import clean_business_data
 from scraper.browser import fetch_page_html
 from scraper.parser import extract_emails, scan_for_roles
@@ -23,7 +23,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("Role Scout: Firm Intelligence")
-st.markdown("Draw a perimeter on the map to strictly target consultancies in a specific area.")
+st.markdown("Isolate professional consultancies and advisory firms using geospatial targeting.")
 
 # State management
 if 'raw_data' not in st.session_state:
@@ -31,9 +31,6 @@ if 'raw_data' not in st.session_state:
 if 'clean_df' not in st.session_state:
     st.session_state.clean_df = pd.DataFrame()
 
-# --- CRITICAL FIX: CACHE THE COORDINATES ---
-# Streamlit reruns every time you click the map. Without this cache, 
-# we spam the mapping API, get blocked, and the map disappears!
 @st.cache_data(show_spinner=False)
 def cached_get_coordinates(street, city):
     return get_coordinates(street, city)
@@ -46,7 +43,18 @@ with st.sidebar:
     
     st.divider()
     
-    st.header("2. Search Parameters")
+    # --- NEW: Search Mode Toggle ---
+    st.header("2. Search Mode")
+    search_mode = st.radio("Select Target Method", ["Draw Perimeter", "Radius Search"])
+    
+    if search_mode == "Radius Search":
+        radius = st.slider("Search Radius (metres)", min_value=100, max_value=5000, value=1000, step=100)
+    else:
+        radius = None
+        
+    st.divider()
+    
+    st.header("3. Industry Parameters")
     industry_focus = st.selectbox(
         "Industry Focus",
         options=["Engineering Consultancy", "Finance Consultancy", "Energy Services", "General Office"]
@@ -60,50 +68,77 @@ with st.sidebar:
     }
     business_type = tag_map[industry_focus]
 
-# --- Step 1: Map & Drawing ---
-# Call our new cached function instead of hitting the server raw
+# --- Step 1: Map & Location ---
 coords = cached_get_coordinates(street_name, city)
 
 if coords:
-    # Initialise the map centred on your chosen street
-    m = folium.Map(location=[coords[0], coords[1]], zoom_start=15)
-    
-    # Add drawing tools (we only need polygons and rectangles for this)
-    draw_options = {
-        'polyline': False, 'circlemarker': False, 'marker': False, 'circle': False,
-        'polygon': True, 'rectangle': True
-    }
-    Draw(export=False, draw_options=draw_options).add_to(m)
-    
-    st.markdown("### Select Search Area")
-    st.info("Use the ⬛ (Rectangle) or ⬟ (Polygon) tools on the left of the map to draw your search zone.")
-    
-    # Render the map WITH a unique key so it remembers your drawings
-    map_data = st_folium(m, width=1000, height=500, key="firm_map")
-    
-    # Only show the search button if the user has actually drawn a shape
-    if map_data and map_data.get("last_active_drawing"):
-        st.success("Perimeter locked. Ready to scan.")
-        fetch_button = st.button("Discover Firms in Perimeter", type="primary", use_container_width=True)
+    # ---------------------------------------------------------
+    # MODE A: DRAW PERIMETER
+    # ---------------------------------------------------------
+    if search_mode == "Draw Perimeter":
+        m = folium.Map(location=[coords[0], coords[1]], zoom_start=15)
         
+        draw_options = {
+            'polyline': False, 'circlemarker': False, 'marker': False, 'circle': False,
+            'polygon': True, 'rectangle': True
+        }
+        Draw(export=False, draw_options=draw_options).add_to(m)
+        
+        st.markdown("### Select Search Area")
+        st.info("Use the ⬛ (Rectangle) or ⬟ (Polygon) tools on the map to draw your specific search zone.")
+        
+        map_data = st_folium(m, width=1000, height=500, key="perimeter_map")
+        
+        if map_data and map_data.get("last_active_drawing"):
+            st.success("Perimeter locked. Ready to scan.")
+            fetch_button = st.button("Discover Firms in Perimeter", type="primary", use_container_width=True)
+            
+            if fetch_button:
+                geom = map_data["last_active_drawing"]["geometry"]
+                if geom["type"] == "Polygon":
+                    with st.spinner("Querying drawn perimeter..."):
+                        raw_coords = geom["coordinates"][0]
+                        polygon_coords = [(lat, lon) for lon, lat in raw_coords]
+                        
+                        st.session_state.raw_data = find_businesses_in_polygon(polygon_coords, business_type)
+                        
+                        if st.session_state.raw_data:
+                            st.session_state.clean_df = clean_business_data(st.session_state.raw_data)
+                            st.success(f"Successfully identified {len(st.session_state.clean_df)} viable targets.")
+                        else:
+                            st.warning("No businesses found in that specific shape. Try drawing a wider area.")
+
+    # ---------------------------------------------------------
+    # MODE B: RADIUS SEARCH
+    # ---------------------------------------------------------
+    elif search_mode == "Radius Search":
+        m = folium.Map(location=[coords[0], coords[1]], zoom_start=14)
+        
+        # Visually render the radius on the map
+        folium.Circle(
+            location=[coords[0], coords[1]],
+            radius=radius,
+            color="#FF4B4B",
+            fill=True,
+            fill_color="#FF4B4B"
+        ).add_to(m)
+        
+        st.markdown("### Search Radius")
+        st.info(f"Targeting all {industry_focus.lower()} locations within a {radius} metre radius.")
+        
+        st_folium(m, width=1000, height=500, key="radius_map")
+        
+        fetch_button = st.button("Discover Firms in Radius", type="primary", use_container_width=True)
         if fetch_button:
-            geom = map_data["last_active_drawing"]["geometry"]
-            if geom["type"] == "Polygon":
-                with st.spinner("Querying drawn perimeter..."):
-                    # GeoJSON provides coordinates as [Longitude, Latitude]
-                    raw_coords = geom["coordinates"][0]
-                    # We must flip them to (Latitude, Longitude) for Overpass
-                    polygon_coords = [(lat, lon) for lon, lat in raw_coords]
-                    
-                    st.session_state.raw_data = find_businesses_in_polygon(polygon_coords, business_type)
-                    
-                    if st.session_state.raw_data:
-                        st.session_state.clean_df = clean_business_data(st.session_state.raw_data)
-                        st.success(f"Successfully identified {len(st.session_state.clean_df)} viable targets.")
-                    else:
-                        st.warning("No businesses found in that specific shape. Try drawing a wider area.")
+            with st.spinner(f"Querying a {radius}m radius..."):
+                st.session_state.raw_data = find_businesses_nearby(coords[0], coords[1], radius, business_type)
+                
+                if st.session_state.raw_data:
+                    st.session_state.clean_df = clean_business_data(st.session_state.raw_data)
+                    st.success(f"Successfully identified {len(st.session_state.clean_df)} viable targets.")
+                else:
+                    st.warning("No businesses found in this area. Try increasing the radius.")
 else:
-    # A fallback so you aren't left staring at a blank screen if the server blocks you
     st.error("⚠️ Could not load the map. The coordinate server might be busy, or the location is misspelled. Please wait 5 seconds and refresh.")
 
 # --- Step 2: Deep Scraping ---
