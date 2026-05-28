@@ -10,6 +10,13 @@ def extract_emails(html_content: str) -> Set[str]:
     cleaned_emails = {email for email in emails if not email.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp'))}
     return cleaned_emails
 
+def extract_linkedin(html_content: str) -> Set[str]:
+    """Scans raw HTML for company LinkedIn profile links."""
+    # Pattern specifically targets corporate company pages and avoids generic sharing links
+    linkedin_pattern = r'https?://(?:www\.)?linkedin\.com/company/[a-zA-Z0-9\-_]+'
+    linkedin_links = set(re.findall(linkedin_pattern, html_content))
+    return linkedin_links
+
 def scan_for_keywords(html_content: str, keywords: List[str]) -> List[str]:
     """Parses HTML text and checks for specific keywords."""
     if not keywords:
@@ -25,6 +32,7 @@ def scan_for_keywords(html_content: str, keywords: List[str]) -> List[str]:
             
     return found_keywords
 
+# --- Quick Local Test ---
 if __name__ == "__main__":
     print("Testing the HTML parser module...")
     
@@ -32,17 +40,14 @@ if __name__ == "__main__":
     <html>
         <body>
             <h1>Join Our Team</h1>
-            <p>We are currently looking for a driven graduate to join our mechanical design team.</p>
-            <p>As an entry-level analyst, you will work on high-impact projects.</p>
-            <p>Send your CV to careers@topfirm.co.uk or reach out to our hiring manager at john.doe@topfirm.co.uk.</p>
-            <img src="banner@2x.png" alt="Company Banner">
+            <p>We are looking for a commercial analyst to join us.</p>
+            <p>Contact us at recruiting@financefirm.com or follow our updates on 
+               <a href="https://www.linkedin.com/company/finance-firm-limited">LinkedIn</a>.</p>
         </body>
     </html>
     """
     
     print("\nScanning dummy HTML...")
-    emails = extract_emails(dummy_html)
-    print(f"Emails found: {emails}")
-    
-    roles = scan_for_keywords(dummy_html, ["graduate", "analyst", "mechanical", "entry-level"])
-    print(f"Keywords matched: {roles}")
+    print(f"Emails found: {extract_emails(dummy_html)}")
+    print(f"LinkedIn links found: {extract_linkedin(dummy_html)}")
+    print(f"Keywords matched: {scan_for_keywords(dummy_html, ['analyst'])}")

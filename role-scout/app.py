@@ -7,7 +7,7 @@ from streamlit_folium import st_folium
 from location.overpass_client import get_coordinates, find_businesses_in_polygon, find_businesses_nearby
 from utils.filters import clean_business_data
 from scraper.browser import fetch_page_html
-from scraper.parser import extract_emails, scan_for_keywords
+from scraper.parser import extract_emails, scan_for_keywords, extract_linkedin
 from utils.constants import FIRM_CATEGORIES, JOB_ROLES
 
 # --- CLOUD SETUP SNIPPET ---
@@ -50,7 +50,6 @@ with st.sidebar:
         
     st.divider()
     
-    # --- NEW: Hierarchical Firm Selection ---
     st.header("2. Firm Identity (Deep Scrape)")
     st.markdown("We pull all offices from the map. The scraper will scan their websites for these exact terms to verify what they do.")
     
@@ -72,7 +71,6 @@ with st.sidebar:
 
     st.divider()
     
-    # --- NEW: Job Role Selection ---
     st.header("3. Hiring Signals")
     all_roles = st.checkbox("Select All Job Roles", value=False)
     if all_roles:
@@ -156,7 +154,7 @@ if not st.session_state.clean_df.empty:
     st.dataframe(st.session_state.clean_df, use_container_width=True, hide_index=True)
     
     st.subheader("Deep Analysis")
-    st.markdown("The scraper will now visit these websites and cross-reference the text against your selected Firm Types and Hiring Signals.")
+    st.markdown("The scraper will now visit these websites and cross-reference the text against your selected parameters.")
     
     scrape_button = st.button("Initiate Deep Scrape", type="primary")
     
@@ -165,6 +163,7 @@ if not st.session_state.clean_df.empty:
         df["Verified Identity (Website Match)"] = ""
         df["Hiring Signals"] = ""
         df["Contact Emails"] = ""
+        df["LinkedIn Profile"] = ""  # New Column
         
         progress_bar = st.progress(0, text="Scanning targets. Please wait...")
         total_firms = len(df)
@@ -176,20 +175,24 @@ if not st.session_state.clean_df.empty:
             html = fetch_page_html(url)
             if html:
                 emails = extract_emails(html)
+                linkedin_links = extract_linkedin(html)
                 matched_identity = scan_for_keywords(html, final_firm_types)
                 matched_roles = scan_for_keywords(html, final_job_roles)
                 
                 df.at[index, "Contact Emails"] = ", ".join(emails) if emails else "None found"
+                df.at[index, "LinkedIn Profile"] = ", ".join(linkedin_links) if linkedin_links else "None found"
                 df.at[index, "Verified Identity (Website Match)"] = ", ".join(matched_identity).title() if matched_identity else "Unverified/Other"
                 df.at[index, "Hiring Signals"] = ", ".join(matched_roles).title() if matched_roles else "No signals"
             else:
                 df.at[index, "Contact Emails"] = "Scan failed"
+                df.at[index, "LinkedIn Profile"] = "Scan failed"
                 df.at[index, "Verified Identity (Website Match)"] = "Scan failed"
                 df.at[index, "Hiring Signals"] = "Scan failed"
                 
         progress_bar.progress(1.0, text="Analysis complete.")
         st.session_state.clean_df = df
         
+        # Display all rows natively without filtering anything out
         st.subheader("Final Intelligence Report")
         st.dataframe(df, use_container_width=True, hide_index=True)
         
@@ -197,6 +200,6 @@ if not st.session_state.clean_df.empty:
         st.download_button(
             label="Download Report as CSV",
             data=csv,
-            file_name=f"finance_intelligence_{city.lower().replace(' ', '_')}.csv",
+            file_name=f"firm_intelligence_{city.lower().replace(' ', '_')}.csv",
             mime="text/csv",
         )
