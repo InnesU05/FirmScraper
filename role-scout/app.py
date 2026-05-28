@@ -1,9 +1,15 @@
 import streamlit as st
 import pandas as pd
+import os
 from location.overpass_client import get_coordinates, find_businesses_nearby
 from utils.filters import clean_business_data
 from scraper.browser import fetch_page_html
 from scraper.parser import extract_emails, scan_for_roles
+
+# --- CLOUD SETUP SNIPPET ---
+# This ensures the cloud server downloads the browser binaries before running the app
+os.system("playwright install chromium")
+# ---------------------------
 
 # Configure a clean, professional layout
 st.set_page_config(page_title="Role Scout", page_icon="🎯", layout="wide")
